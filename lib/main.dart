@@ -1,19 +1,34 @@
-// To use Google Maps you must supply an API key for Android and iOS.
+// The Google Maps API key is injected via environment variables to avoid
+// committing it to source control. Create a `.env` file at the project root
+// (example included) containing:
 //
-// Android: add a <meta-data android:name="com.google.android.geo.API_KEY"
-//            android:value="YOUR_KEY"/>
-//            entry inside <application> in android/app/src/main/AndroidManifest.xml
+//     GOOGLE_MAPS_API_KEY=your_real_key_here
 //
-// iOS: set `GMS_API_KEY` in ios/Runner/Info.plist or use
-//      <key>GMSApiKey</key><string>YOUR_KEY</string>
+// Android: the build.gradle uses manifest placeholders to substitute the
+//         variable into AndroidManifest.xml. See android/app/build.gradle.
+// iOS: you can read dotenv at runtime and set the key in Info.plist or use the
+//      Xcode build settings to pass it similarly.
 //
-// After adding the key, run `flutter pub get` and rebuild the app.
+// The app loads the .env file at startup using flutter_dotenv.
 
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // start loading .env in background; don't block app startup
+  dotenv.load(fileName: ".env").then((_) {
+    debugPrint('dotenv loaded: ${dotenv.env}');
+  }).catchError((e, st) {
+    debugPrint('failed to load .env: $e');
+    debugPrint('$st');
+  });
+
   runApp(const NotJoyrideApp());
 }
 
@@ -28,7 +43,105 @@ class NotJoyrideApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
         useMaterial3: true,
       ),
-      home: const MainPage(),
+      home: const LoginPage(),
+    );
+  }
+}
+
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  bool _loggingIn = false;
+
+  Future<void> _doLogin() async {
+    setState(() {
+      _loggingIn = true;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('logged_in', true);
+    await prefs.setBool('first_time', true);
+    // push to main page which will progress to registration automatically
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const MainPage()));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Login')),
+      body: Center(
+        child: _loggingIn
+            ? const CircularProgressIndicator()
+            : ElevatedButton(
+                onPressed: _doLogin,
+                child: const Text('Login'),
+              ),
+      ),
+    );
+  }
+}
+
+class RegistrationPage extends StatefulWidget {
+  const RegistrationPage({super.key});
+
+  @override
+  State<RegistrationPage> createState() => _RegistrationPageState();
+}
+
+class _RegistrationPageState extends State<RegistrationPage> {
+  final _formKey = GlobalKey<FormState>();
+  final _usernameCtrl = TextEditingController();
+  final _mobileCtrl = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Register')),
+      body: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              TextFormField(
+                controller: _usernameCtrl,
+                decoration: const InputDecoration(labelText: 'Username'),
+                validator: (v) => v == null || v.isEmpty ? 'Required' : null,
+              ),
+              TextFormField(
+                controller: _mobileCtrl,
+                keyboardType: TextInputType.phone,
+                decoration:
+                    const InputDecoration(labelText: 'Mobile (09XXXXXXXXX)'),
+                validator: (v) {
+                  if (v == null || v.isEmpty) return 'Required';
+                  final reg = RegExp(r'^09\d{9}\$');
+                  if (!reg.hasMatch(v)) return 'Invalid PH number';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: () async {
+                  if (_formKey.currentState?.validate() ?? false) {
+                    final prefs = await SharedPreferences.getInstance();
+                    await prefs.setBool('first_time', false);
+                    Navigator.of(context).pop();
+                  }
+                },
+                child: const Text('Save'),
+              )
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -42,6 +155,43 @@ class MainPage extends StatefulWidget {
 
 class _MainPageState extends State<MainPage> {
   int _selectedIndex = 0;
+
+  bool _loggedIn = false;
+  bool _firstTime = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLogin();
+  }
+
+  Future<void> _checkLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    _loggedIn = prefs.getBool('logged_in') ?? false;
+    if (_loggedIn) {
+      _firstTime = prefs.getBool('first_time') ?? true;
+      if (_firstTime) {
+        // send to registration flow
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => const RegistrationPage()));
+        });
+      }
+    }
+    setState(() {});
+  }
+
+  void _onLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('logged_in', true);
+    await prefs.setBool('first_time', true);
+    _loggedIn = true;
+    _firstTime = true;
+    setState(() {});
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => const RegistrationPage()));
+  }
+
 
   static const List<Widget> _pages = <Widget>[
     RideHomePage(),
